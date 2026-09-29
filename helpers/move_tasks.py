@@ -1,9 +1,9 @@
 """Bulk-move workflow tasks to another stage, recording a revert CSV first.
 
-Reads data hashes from a file (one per line), finds each task's current stage,
-writes a CSV with everything needed to revert or reprocess the move (initial
-stage, destination stage, storage item UUID, and optionally the label hash of
-the same data unit in a second project), then executes the moves.
+Reads data hashes from a file (one per line) or all tasks from one or more
+source stages, then writes a CSV with everything needed to revert or reprocess
+the move (initial stage, destination stage, storage item UUID, and optionally
+the label hash of the same data unit in a second project) before moving them.
 
 The CSV is written before any task is moved, and rewritten as each origin-stage
 batch completes, so an interrupted run still records where every task started.
@@ -15,6 +15,18 @@ data hash in any stage), already_in_destination.
         --data-hashes-file hashes.txt \\
         --destination-stage "Annotate 1" \\
         --label-project-hash 11111111-1111-1111-1111-111111111111 \\
+        --output-csv moves.csv \\
+        --ssh-key-env ENCORD_SDK_KEY \\
+        --domain https://api.encord.com
+
+To move every task currently in specific stages, replace --data-hashes-file
+with one --source-stage per stage (title or UUID):
+
+    uv run helpers/move_tasks.py \\
+        --project-hash 00000000-0000-0000-0000-000000000000 \\
+        --source-stage "Hand Tracking Agent" \\
+        --source-stage "Hand Pose Agent" \\
+        --destination-stage "Auto Segment Task Agent" \\
         --output-csv moves.csv \\
         --ssh-key-env ENCORD_SDK_KEY \\
         --domain https://api.encord.com
@@ -47,11 +59,16 @@ def log(msg: str) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--project-hash", required=True, help="Project whose tasks to move")
-    parser.add_argument(
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument(
         "--data-hashes-file",
-        required=True,
         type=Path,
         help="Text file with one data hash per line",
+    )
+    source.add_argument(
+        "--source-stage",
+        action="append",
+        help="Move every task currently in this stage (title or UUID); repeat for multiple stages",
     )
     parser.add_argument(
         "--destination-stage",
@@ -96,10 +113,11 @@ def write_csv(path: Path, records: list) -> None:
 
 def main() -> int:
     args = parse_args()
-    data_hashes = list(dict.fromkeys(args.data_hashes_file.read_text().split()))
-    if not data_hashes:
-        raise SystemExit(f"No data hashes found in {args.data_hashes_file}")
-    log(f"{len(data_hashes)} data hash(es) to move")
+    if args.data_hashes_file:
+        data_hashes = list(dict.fromkeys(args.data_hashes_file.read_text().split()))
+        if not data_hashes:
+            raise SystemExit(f"No data hashes found in {args.data_hashes_file}")
+        log(f"{len(data_hashes)} data hash(es) to move")
 
     client = load_client(args.ssh_key_env, args.domain)
     project = client.get_project(args.project_hash)
@@ -107,11 +125,25 @@ def main() -> int:
     log(f"destination stage: {destination.title} ({destination.uuid})")
 
     tasks = {}
-    for stage in project.workflow.stages:
-        for i in range(0, len(data_hashes), GET_TASKS_CHUNK):
-            for task in stage.get_tasks(data_hash=data_hashes[i : i + GET_TASKS_CHUNK]):
+    if args.source_stage:
+        source_stages = {}
+        for name in args.source_stage:
+            stage = resolve_stage(project.workflow, name)
+            source_stages[stage.uuid] = stage
+        for stage in source_stages.values():
+            for task in stage.get_tasks():
                 tasks[str(task.data_hash)] = (task, stage)
-        log(f"scanned {stage.title}: {len(tasks)} of {len(data_hashes)} located so far")
+            log(f"scanned {stage.title}: {len(tasks)} task(s) located so far")
+        data_hashes = list(tasks)
+        if not data_hashes:
+            log("no tasks found in the source stages")
+            return 0
+    else:
+        for stage in project.workflow.stages:
+            for i in range(0, len(data_hashes), GET_TASKS_CHUNK):
+                for task in stage.get_tasks(data_hash=data_hashes[i : i + GET_TASKS_CHUNK]):
+                    tasks[str(task.data_hash)] = (task, stage)
+            log(f"scanned {stage.title}: {len(tasks)} of {len(data_hashes)} located so far")
 
     item_rows = label_rows_by_data_hash(project, data_hashes)
     source_rows = {}
