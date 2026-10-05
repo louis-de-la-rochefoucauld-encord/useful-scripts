@@ -358,7 +358,7 @@ def render(snapshot, logs, errors, start, end, verbose=False, audit=None):
             return f"{n(audited_states.get(state, 0))} {state} (audit {audit_age})"
         return f"Confirmed failures unavailable; {n(counts.get(attempt_key))} attempt records"
 
-    prior_summary = (f"{n(audited_states.get('prior_failure'))} prior_failure (audit {audit_age})\n"
+    prior_summary = (f"{n(audited_states.get('prior_failure', 0))} prior_failure (audit {audit_age})\n"
                      if audit else "Prior failures unavailable\n")
     print(f"\nWalden Hand Pose Agent status — {timestamp(snapshot['finished_at'])}")
     print(f"Production. Controller {setting_status(enabled)}; {selection}. "
