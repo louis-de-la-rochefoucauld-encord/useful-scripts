@@ -115,6 +115,18 @@ def export_csv(path, snapshot):
     return Counter(job["state"] for job in jobs)
 
 
+def caption_rows(outcomes):
+    def total(**match):
+        return sum(row["n"] for row in outcomes if all(row.get(key) == value for key, value in match.items()))
+
+    return [
+        ("High Level Caption repaired: archived label", total(caption_source="archived_label")),
+        ("High Level Caption repaired: metadata", total(caption_source="metadata")),
+        ("Sent to Annotate 1 (no Detailed Caption)", total(state="rerouted", destination="Annotate 1")),
+        ("Sent to Archive (no caption source)", total(state="rerouted", destination="Archive")),
+    ]
+
+
 def print_table(status):
     counts = status["counts"]
     rows = [
@@ -122,11 +134,11 @@ def print_table(status):
         ("Pending", counts.get("pending", 0)),
         ("Delivered in last hour (tasks/hour)", status["delivered_last_hour"]),
         ("Delivered total", counts.get("delivered", 0)),
-        ("Rerouted (Annotate 1 / Archive)", counts.get("rerouted", 0)),
         ("Left Data Delivery", counts.get("left_stage", 0)),
         ("Blocked: missing data", counts.get("blocked_missing_data", 0)),
         ("Blocked: conflicting files", counts.get("blocked_conflict", 0)),
         ("Failed", counts.get("failed", 0)),
+        *caption_rows(status.get("caption_outcomes") or []),
     ]
     width = max(len(label) for label, _ in rows)
     print("\nWalden Data Delivery — " + datetime.now(ZoneInfo("Europe/London")).strftime("%Y-%m-%d %H:%M:%S %Z"))
